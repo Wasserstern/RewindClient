@@ -92,6 +92,7 @@ public class Client : MonoBehaviour
             currentDashCooldown += Time.deltaTime;
         }
         if(currentPosition != nextPosition){
+            // Set initial start position. Freeze player
             transform.position = nextPosition;
             currentPosition = nextPosition;
             rgbd.isKinematic = true;
@@ -163,6 +164,8 @@ public class Client : MonoBehaviour
                             break;
                         }
                         case "SERVERGAMESTARTEDMESSAGE":{
+                            ServerGameStartedMessage serverGameStartedMessage = JsonUtility.FromJson<ServerGameStartedMessage>(splitMessage[1]);
+                            
                             break;
                         }
                     }

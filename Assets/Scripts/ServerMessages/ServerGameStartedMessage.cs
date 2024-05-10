@@ -1,3 +1,5 @@
-public class SeverGameStartedMessage{
-    
+public class ServerGameStartedMessage{
+    public ServerGameStartedMessage(){
+        
+    }
 }

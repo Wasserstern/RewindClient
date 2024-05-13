@@ -15,6 +15,9 @@ public class Client : MonoBehaviour
     public float dashSpeed;
     public float dashCooldown;
     public float dashTimeInSeconds;
+    public float positionCorrectionThreshold;
+    public float updatesPerSecond;
+    public GameObject playerPrefab;
 
     [Header("NetworkSettings")]
     public string username;
@@ -39,13 +42,19 @@ public class Client : MonoBehaviour
     Vector3 dashDirection;
     Vector3 currentPosition;
     Vector3 nextPosition;
+    int clientTick;
+    bool hasBeenCorrected;
+    Dictionary<int , Vector3> previousPositions;
     [SerializeField]
     float currentDashCooldown;
+    float updateTimer;
+    bool readyToUpdate;
     // Start is called before the first frame update
     async void Start()
     {
         currentDashCooldown = dashCooldown;
         rgbd = GetComponent<Rigidbody>();
+        previousPositions = new Dictionary<int, Vector3>();
 
         // Establish server connection
         var hostName = Dns.GetHostName();
@@ -61,29 +70,7 @@ public class Client : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        // Test stuff
-        /*
-        if(stream != null){
-            if(Input.GetKeyDown(KeyCode.M)){
-                TestMessage messageToServer = new TestMessage();
-                string json = JsonUtility.ToJson(messageToServer);
-                Debug.Log(json);
-                string messageJSON = "TEST%" + json;
-                Debug.Log(messageJSON);
-                byte[] bytes = Encoding.ASCII.GetBytes(messageJSON);
-                stream.Write(bytes, 0, bytes.Length);
-                Debug.Log("Should have sent a message.");
-            }
-            if(Input.GetKeyDown(KeyCode.P)){
-                ClientMovedMessage message = new ClientMovedMessage(transform.position.x, transform.position.y, transform.position.z);
-                string messageJSON = "PLAYERMOVED%" + JsonUtility.ToJson(message);
-                Debug.Log(messageJSON);
-                byte[] bytes = Encoding.ASCII.GetBytes(messageJSON);
-                stream.Write(bytes, 0, bytes.Length);
-                Debug.Log("Should have sent a player moved message");
-            }
-        }
-        */
+
         if(gameStarted){
             if(currentDashCooldown > dashTimeInSeconds){
                 GetInput();
@@ -96,6 +83,12 @@ public class Client : MonoBehaviour
             transform.position = nextPosition;
             currentPosition = nextPosition;
             rgbd.isKinematic = true;
+        }
+
+        updateTimer += Time.deltaTime;
+        if(updateTimer > 1f / updatesPerSecond){
+            readyToUpdate = true;
+            updateTimer = 0f;
         }
     }
     private void FixedUpdate()
@@ -146,6 +139,17 @@ public class Client : MonoBehaviour
             stream.Write(bytes, 0, bytes.Length);
         }
     }
+    public void UpdateServer(){
+        if(readyToUpdate){
+            if(previousPositions[clientTick] != transform.position){
+                // Client moved since last tick. Send Move Message
+                ClientMovedMessage clientMovedMessage = new ClientMovedMessage(transform.position.x, transform.position.y, transform.position.z);
+                string msg = "CLIENTMOVEDMESSAGE%" + JsonUtility.ToJson(clientMovedMessage);
+                byte[] bytes = Encoding.ASCII.GetBytes(msg);
+                stream.Write(bytes, 0, bytes.Length);
+            }
+        }
+    }
     public void ListenForServerMesssage(){
         try{
             while(true){
@@ -165,7 +169,50 @@ public class Client : MonoBehaviour
                         }
                         case "SERVERGAMESTARTEDMESSAGE":{
                             ServerGameStartedMessage serverGameStartedMessage = JsonUtility.FromJson<ServerGameStartedMessage>(splitMessage[1]);
-                            
+                            WorldState initialState = serverGameStartedMessage.initialState;
+                            List<ClientInformation> clientInformationList = initialState.clientInformationList;
+                            foreach(ClientInformation info in clientInformationList)
+                            {
+                                if(info.username != username){
+                                    // Instantiate other players
+                                    GameObject player = Instantiate(playerPrefab);
+                                    player.transform.position = info.currentPosition;
+                                    player.name = info.username;
+                                }
+                                else{
+                                    transform.position = info.currentPosition;
+                                }
+
+                            }
+                            gameStarted = true;
+                            break;
+                        }
+                        case "SERVERWORLDSTATEMESSAGE":{
+                            ServerWorldStateMessage serverWorldStateMessage = JsonUtility.FromJson<ServerWorldStateMessage>(splitMessage[1]);
+                            WorldState newWorldState =  serverWorldStateMessage.newWorldState;
+                            List<ClientInformation> clientInformationList = newWorldState.clientInformationList;
+
+                            foreach(ClientInformation info in clientInformationList)
+                            {
+                                if(info.username != username){
+                                    // Update other players position
+                                    // TODO: Implement interpolation between two positions instead of directly updating the position
+                                }
+                                else{
+                                    // Check if previousPositions were corrected by the server
+                                    Vector3 correctedPosition = info.currentPosition;
+                                    Vector3 previousPosition = previousPositions[serverWorldStateMessage.currentTick];
+                                    if(Vector3.Distance(correctedPosition, previousPosition) > positionCorrectionThreshold){
+                                        // Correct players position. This possibly warps him.
+                                        // TODO: Instead of correcting the position directly. Do a step by step correction. Taking previous client frames.
+                                        transform.position = correctedPosition;
+                                        hasBeenCorrected = true;
+                                    }
+                                }
+                            }
+                            clientTick = serverWorldStateMessage.currentTick;
+                            Thread updateServerThread = new Thread(UpdateServer);
+                            updateServerThread.Start();
                             break;
                         }
                     }
